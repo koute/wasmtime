@@ -381,6 +381,12 @@ impl InstancePool {
                     vmctx: VMContext {
                         _marker: marker::PhantomPinned,
                     },
+
+                    #[cfg(target_os = "linux")]
+                    is_reusable: false,
+
+                    #[cfg(target_os = "linux")]
+                    saved_globals: Default::default(),
                 },
             );
         }
@@ -444,6 +450,14 @@ impl InstancePool {
         strategy: PoolingAllocationStrategy,
         req: InstanceAllocationRequest,
     ) -> Result<InstanceHandle, InstantiationError> {
+        #[cfg(target_os = "linux")]
+        match req.memory_source {
+            super::MemorySource::FromCreator => {}
+            super::MemorySource::CopyOnWriteInitialize => {
+                return Err(InstantiationError::IncompatibleAllocationStrategy);
+            }
+        }
+
         let index = {
             let mut free_list = self.free_list.lock().unwrap();
             if free_list.is_empty() {
@@ -1412,7 +1426,7 @@ unsafe impl InstanceAllocator for PoolingInstanceAllocator {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{Imports, StorePtr, VMSharedSignatureIndex};
+    use crate::{Imports, MemorySource, StorePtr, VMSharedSignatureIndex};
     use wasmtime_environ::{
         EntityRef, Global, GlobalInit, Memory, MemoryPlan, ModuleType, SignatureIndex, Table,
         TablePlan, TableStyle, WasmType,
@@ -1778,6 +1792,7 @@ mod test {
                             host_state: Box::new(()),
                             store: StorePtr::empty(),
                             wasm_data: &[],
+                            memory_source: MemorySource::FromCreator,
                         },
                     )
                     .expect("allocation should succeed"),
@@ -1804,6 +1819,7 @@ mod test {
                 host_state: Box::new(()),
                 store: StorePtr::empty(),
                 wasm_data: &[],
+                memory_source: MemorySource::FromCreator,
             },
         ) {
             Err(InstantiationError::Limit(3)) => {}

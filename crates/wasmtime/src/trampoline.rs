@@ -18,7 +18,7 @@ use std::any::Any;
 use std::sync::Arc;
 use wasmtime_environ::{EntityIndex, GlobalIndex, MemoryIndex, Module, TableIndex};
 use wasmtime_runtime::{
-    Imports, InstanceAllocationInfo, InstanceAllocationRequest, InstanceAllocator,
+    Imports, InstanceAllocationInfo, InstanceAllocationRequest, InstanceAllocator, MemorySource,
     OnDemandInstanceAllocator, StorePtr, VMFunctionImport, VMSharedSignatureIndex,
 };
 
@@ -52,6 +52,7 @@ fn create_handle(
                     image_base: 0,
                     shared_signatures: shared_signature_id.into(),
                 }),
+                memory_source: MemorySource::FromCreator,
             },
         )?;
 

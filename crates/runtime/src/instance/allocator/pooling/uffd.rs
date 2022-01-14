@@ -435,7 +435,7 @@ impl Drop for PageFaultHandler {
 mod test {
     use super::*;
     use crate::{
-        Imports, InstanceAllocationInfo, InstanceAllocationRequest, InstanceLimits, ModuleLimits,
+        Imports, InstanceAllocationInfo, InstanceAllocationRequest, InstanceLimits, MemorySource, ModuleLimits,
         PoolingAllocationStrategy, Store, StorePtr, VMSharedSignatureIndex,
     };
     use std::sync::atomic::AtomicU64;
@@ -591,6 +591,7 @@ mod test {
                                 host_state: Box::new(()),
                                 store: StorePtr::new(&mut mock_store),
                                 wasm_data: &[],
+                                memory_source: MemorySource::FromCreator,
                             },
                         )
                         .expect("instance should allocate"),

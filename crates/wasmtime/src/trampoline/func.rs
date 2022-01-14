@@ -9,8 +9,8 @@ use wasmtime_environ::{EntityIndex, Module, ModuleType, PrimaryMap, SignatureInd
 use wasmtime_jit::{CodeMemory, MmapVec, ProfilingAgent};
 use wasmtime_runtime::{
     Imports, InstanceAllocationInfo, InstanceAllocationRequest, InstanceAllocator, InstanceHandle,
-    OnDemandInstanceAllocator, StorePtr, VMContext, VMFunctionBody, VMSharedSignatureIndex,
-    VMTrampoline,
+    MemorySource, OnDemandInstanceAllocator, StorePtr, VMContext, VMFunctionBody,
+    VMSharedSignatureIndex, VMTrampoline,
 };
 
 struct TrampolineState<F> {
@@ -173,6 +173,7 @@ pub unsafe fn create_raw_function(
             store: StorePtr::empty(),
             wasm_data: &[],
             info,
+            memory_source: MemorySource::FromCreator,
         })?,
     )
 }

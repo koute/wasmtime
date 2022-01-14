@@ -36,6 +36,18 @@ pub use self::pooling::{
     InstanceLimits, ModuleLimits, PoolingAllocationStrategy, PoolingInstanceAllocator,
 };
 
+/// The source of memory which the instance allocator is supposed to use.
+#[derive(Copy, Clone, Debug)]
+pub enum MemorySource {
+    /// Use the `MemoryCreator` provided when configuring the engine.
+    FromCreator,
+
+    /// Ignore the `MemoryCreator` provided when configuring the engine;
+    /// instead directly use `mmap` to allocate memory appropriate for a reusable instance.
+    #[cfg(target_os = "linux")]
+    CopyOnWriteInitialize,
+}
+
 /// Information needed for the instance allocation request and
 /// afterward as well (for lazy initialization). Will be held alive by
 /// the instance.
@@ -96,6 +108,9 @@ pub struct InstanceAllocationRequest<'a> {
     /// responsibility of the callee when allocating to ensure that this data
     /// outlives the instance.
     pub wasm_data: *const [u8],
+
+    /// The memory source to use when allocating a new instance.
+    pub memory_source: MemorySource,
 }
 
 /// A pointer to a Store. This Option<*mut dyn Store> is wrapped in a struct
@@ -150,6 +165,10 @@ pub enum InstantiationError {
     /// A limit on how many instances are supported has been reached.
     #[error("Limit of {0} concurrent instances has been reached")]
     Limit(u32),
+
+    /// The configured allocation strategy is incompatible with this kind of an instance.
+    #[error("Incompatible allocation strategy")]
+    IncompatibleAllocationStrategy,
 }
 
 /// An error while creating a fiber stack.
@@ -677,6 +696,7 @@ impl OnDemandInstanceAllocator {
         &self,
         module: &Module,
         store: &mut StorePtr,
+        memory_source: MemorySource,
     ) -> Result<PrimaryMap<DefinedMemoryIndex, Memory>, InstantiationError> {
         let creator = self
             .mem_creator
@@ -685,16 +705,38 @@ impl OnDemandInstanceAllocator {
         let num_imports = module.num_imported_memories;
         let mut memories: PrimaryMap<DefinedMemoryIndex, _> =
             PrimaryMap::with_capacity(module.memory_plans.len() - num_imports);
-        for plan in &module.memory_plans.values().as_slice()[num_imports..] {
-            memories.push(
-                Memory::new_dynamic(plan, creator, unsafe {
-                    store
-                        .get()
-                        .expect("if module has memory plans, store is not empty")
-                })
-                .map_err(InstantiationError::Resource)?,
-            );
+
+        let plans = &module.memory_plans.values().as_slice()[num_imports..];
+        if plans.is_empty() {
+            return Ok(memories);
         }
+
+        let store = unsafe {
+            store
+                .get()
+                .expect("if module has memory plans, store is not empty")
+        };
+
+        match memory_source {
+            MemorySource::FromCreator => {
+                for plan in plans {
+                    memories.push(
+                        Memory::new_dynamic(plan, creator, store)
+                            .map_err(InstantiationError::Resource)?,
+                    );
+                }
+            }
+            #[cfg(target_os = "linux")]
+            MemorySource::CopyOnWriteInitialize => {
+                for plan in plans {
+                    memories.push(
+                        Memory::new_snapshottable(plan, store)
+                            .map_err(InstantiationError::Resource)?,
+                    );
+                }
+            }
+        }
+
         Ok(memories)
     }
 }
@@ -714,7 +756,7 @@ unsafe impl InstanceAllocator for OnDemandInstanceAllocator {
         &self,
         mut req: InstanceAllocationRequest,
     ) -> Result<InstanceHandle, InstantiationError> {
-        let memories = self.create_memories(&req.module, &mut req.store)?;
+        let memories = self.create_memories(&req.module, &mut req.store, req.memory_source)?;
         let tables = Self::create_tables(&req.module, &mut req.store)?;
 
         let host_state = std::mem::replace(&mut req.host_state, Box::new(()));
@@ -733,6 +775,15 @@ unsafe impl InstanceAllocator for OnDemandInstanceAllocator {
                 vmctx: VMContext {
                     _marker: marker::PhantomPinned,
                 },
+
+                #[cfg(target_os = "linux")]
+                is_reusable: match req.memory_source {
+                    MemorySource::FromCreator => false,
+                    MemorySource::CopyOnWriteInitialize => true,
+                },
+
+                #[cfg(target_os = "linux")]
+                saved_globals: Default::default(),
             };
             let layout = instance.alloc_layout();
             let instance_ptr = alloc::alloc(layout) as *mut Instance;
