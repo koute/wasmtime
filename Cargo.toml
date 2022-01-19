@@ -123,5 +123,9 @@ name = "instantiation"
 harness = false
 
 [[bench]]
+name = "server"
+harness = false
+
+[[bench]]
 name = "thread_eager_init"
 harness = false
