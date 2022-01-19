@@ -44,6 +44,48 @@ impl Mmap {
         Self::accessible_reserved(rounded_size, rounded_size)
     }
 
+    /// Creates a new `Mmap` from an already-open `File`. Only
+    /// supported on Unix platforms.
+    #[cfg(unix)]
+    pub fn from_open_file(
+        file: &File,
+        is_writable: bool,
+        mapping_len: Option<usize>,
+        mapping_addr: Option<usize>,
+    ) -> Result<Self> {
+        let len = match mapping_len {
+            Some(given_len) => given_len,
+            None => {
+                let len = file
+                    .metadata()
+                    .context("failed to get file metadata")?
+                    .len();
+                usize::try_from(len).map_err(|_| anyhow!("file too large to map"))?
+            }
+        };
+        let prot_flags = if is_writable {
+            rustix::io::ProtFlags::READ | rustix::io::ProtFlags::WRITE
+        } else {
+            rustix::io::ProtFlags::READ
+        };
+        let map_flags = if mapping_addr.is_some() {
+            rustix::io::MapFlags::PRIVATE | rustix::io::MapFlags::FIXED
+        } else {
+            rustix::io::MapFlags::PRIVATE
+        };
+        let requested_addr = mapping_addr.unwrap_or(0) as *mut _;
+        let ptr = unsafe {
+            rustix::io::mmap(requested_addr, len, prot_flags, map_flags, file, 0)
+                .context(format!("mmap failed to allocate {:#x} bytes", len))?
+        };
+
+        Ok(Self {
+            ptr: ptr as usize,
+            len,
+            file: None,
+        })
+    }
+
     /// Creates a new `Mmap` by opening the file located at `path` and mapping
     /// it into memory.
     ///
@@ -57,28 +99,12 @@ impl Mmap {
         #[cfg(unix)]
         {
             let file = File::open(path).context("failed to open file")?;
-            let len = file
-                .metadata()
-                .context("failed to get file metadata")?
-                .len();
-            let len = usize::try_from(len).map_err(|_| anyhow!("file too large to map"))?;
-            let ptr = unsafe {
-                rustix::io::mmap(
-                    ptr::null_mut(),
-                    len,
-                    rustix::io::ProtFlags::READ,
-                    rustix::io::MapFlags::PRIVATE,
-                    &file,
-                    0,
-                )
-                .context(format!("mmap failed to allocate {:#x} bytes", len))?
-            };
-
-            Ok(Self {
-                ptr: ptr as usize,
-                len,
-                file: Some(file),
-            })
+            let mut ret = Self::from_open_file(
+                &file, /* is_writable = */ false, /* len = */ None,
+                /* addr = */ None,
+            )?;
+            ret.file = Some(file);
+            Ok(ret)
         }
 
         #[cfg(windows)]
@@ -149,6 +175,18 @@ impl Mmap {
                 Ok(ret)
             }
         }
+    }
+
+    /// Chop `offset` bytes off the front of this mapping, dropping
+    /// responsibility for munmap'ing this memory on Drop. This should
+    /// be used when layering another mmap on top of the first;
+    /// otherwise, one might double-munmap, which could lead to race
+    /// conditions where another mmap grabs the space between one and
+    /// another munmap.
+    #[cfg(unix)]
+    pub unsafe fn alter_base(&mut self, offset: usize) {
+        self.ptr += offset;
+        self.len -= offset;
     }
 
     /// Create a new `Mmap` pointing to `accessible_size` bytes of page-aligned accessible memory,

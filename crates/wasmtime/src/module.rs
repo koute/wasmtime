@@ -336,7 +336,12 @@ impl Module {
         };
 
         let modules = engine.run_maybe_parallel(artifacts, |(a, b)| {
-            CompiledModule::from_artifacts(a, b, &*engine.config().profiler)
+            CompiledModule::from_artifacts(
+                a,
+                b,
+                &*engine.config().profiler,
+                engine.unique_id_allocator(),
+            )
         })?;
 
         Self::from_parts(engine, modules, main_module, Arc::new(types), &[])

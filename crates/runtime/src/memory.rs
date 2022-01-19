@@ -2,6 +2,8 @@
 //!
 //! `RuntimeLinearMemory` is to WebAssembly linear memories what `Table` is to WebAssembly tables.
 
+#[cfg(feature = "memfd-allocator")]
+use crate::instance::MemFDSlot;
 use crate::mmap::Mmap;
 use crate::vmcontext::VMMemoryDefinition;
 use crate::Store;
@@ -208,7 +210,12 @@ pub enum Memory {
         /// A callback which makes portions of `base` accessible for when memory
         /// is grown. Otherwise it's expected that accesses to `base` will
         /// fault.
-        make_accessible: fn(*mut u8, usize) -> Result<()>,
+        make_accessible: Option<fn(*mut u8, usize) -> Result<()>>,
+
+        /// A reference to the MemFDSlot, if any, for this memory; use
+        /// this to grow.
+        #[cfg(feature = "memfd-allocator")]
+        memfd_slot: Option<*mut MemFDSlot>,
 
         /// Stores the pages in the linear memory that have faulted as guard pages when using the `uffd` feature.
         /// These pages need their protection level reset before the memory can grow.
@@ -220,6 +227,9 @@ pub enum Memory {
     /// to this instance.
     Dynamic(Box<dyn RuntimeLinearMemory>),
 }
+
+unsafe impl Send for Memory {}
+unsafe impl Sync for Memory {}
 
 impl Memory {
     /// Create a new dynamic (movable) memory instance for the specified plan.
@@ -253,9 +263,34 @@ impl Memory {
         Ok(Memory::Static {
             base,
             size: minimum,
-            make_accessible,
+            make_accessible: Some(make_accessible),
             #[cfg(all(feature = "uffd", target_os = "linux"))]
             guard_page_faults: Vec::new(),
+            #[cfg(feature = "memfd-allocator")]
+            memfd_slot: None,
+        })
+    }
+
+    /// Create a new static (immovable) memory instance backed by a MemFD.
+    #[cfg(feature = "memfd-allocator")]
+    pub fn new_memfd(
+        plan: &MemoryPlan,
+        base: &'static mut [u8],
+        memfd_slot: *mut MemFDSlot,
+        store: &mut dyn Store,
+    ) -> Result<Self> {
+        let (minimum, maximum) = Self::limit_new(plan, store)?;
+
+        let base = match maximum {
+            Some(max) if max < base.len() => &mut base[..max],
+            _ => base,
+        };
+
+        Ok(Memory::Static {
+            base,
+            size: minimum,
+            make_accessible: None,
+            memfd_slot: Some(memfd_slot),
         })
     }
 
@@ -373,6 +408,21 @@ impl Memory {
         }
     }
 
+    /// Returns whether or not this memory is backed by a MemFD image.
+    #[cfg(feature = "memfd-allocator")]
+    pub(crate) fn is_memfd_with_image(&self) -> bool {
+        if let Memory::Static {
+            memfd_slot: Some(slot),
+            ..
+        } = self
+        {
+            let slot = unsafe { slot.as_ref().unwrap() };
+            slot.image.is_some()
+        } else {
+            false
+        }
+    }
+
     /// Grow memory by the specified amount of wasm pages.
     ///
     /// Returns `None` if memory can't be grown by the specified amount
@@ -443,12 +493,35 @@ impl Memory {
         }
 
         match self {
+            #[cfg(feature = "memfd-allocator")]
+            Memory::Static {
+                base,
+                size,
+                memfd_slot: Some(memfd_slot),
+                ..
+            } => {
+                // Never exceed static memory size
+                if new_byte_size > base.len() {
+                    store.memory_grow_failed(&format_err!("static memory size exceeded"));
+                    return Ok(None);
+                }
+
+                let memfd_slot = memfd_slot.as_mut().unwrap();
+                if let Err(e) = memfd_slot.set_heap_limit(new_byte_size) {
+                    store.memory_grow_failed(&e);
+                    return Ok(None);
+                }
+                *size = new_byte_size;
+            }
             Memory::Static {
                 base,
                 size,
                 make_accessible,
                 ..
             } => {
+                let make_accessible = make_accessible
+                    .expect("make_accessible must be Some if this is not a MemFD memory");
+
                 // Never exceed static memory size
                 if new_byte_size > base.len() {
                     store.memory_grow_failed(&format_err!("static memory size exceeded"));
@@ -540,7 +613,9 @@ impl Default for Memory {
         Memory::Static {
             base: &mut [],
             size: 0,
-            make_accessible: |_, _| unreachable!(),
+            make_accessible: Some(|_, _| unreachable!()),
+            #[cfg(feature = "memfd-allocator")]
+            memfd_slot: None,
             #[cfg(all(feature = "uffd", target_os = "linux"))]
             guard_page_faults: Vec::new(),
         }

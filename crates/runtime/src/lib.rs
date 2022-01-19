@@ -63,6 +63,14 @@ pub use crate::vmcontext::{
     VMSharedSignatureIndex, VMTableDefinition, VMTableImport, VMTrampoline, ValRaw,
 };
 
+mod module_id;
+pub use module_id::{CompiledModuleId, CompiledModuleIdAllocator};
+
+#[cfg(feature = "memfd-allocator")]
+mod memfd;
+#[cfg(feature = "memfd-allocator")]
+pub use crate::memfd::{MemFdRegistry, ModuleMemFds};
+
 /// Version number of this crate.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

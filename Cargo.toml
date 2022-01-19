@@ -52,7 +52,7 @@ more-asserts = "0.2.1"
 tempfile = "3.1.0"
 test-programs = { path = "crates/test-programs" }
 wasmtime-runtime = { path = "crates/runtime" }
-tokio = { version = "1.8.0", features = ["rt", "time", "macros", "rt-multi-thread"] }
+tokio = { version = "1.8.0", features = ["rt", "time", "macros", "sync", "rt-multi-thread"] }
 tracing-subscriber = "0.3.1"
 wast = "38.0.0"
 criterion = "0.3.4"
@@ -95,6 +95,8 @@ vtune = ["wasmtime/vtune"]
 wasi-crypto = ["wasmtime-wasi-crypto"]
 wasi-nn = ["wasmtime-wasi-nn"]
 uffd = ["wasmtime/uffd"]
+pooling-allocator = ["wasmtime/pooling-allocator"]
+memfd-allocator = ["pooling-allocator", "wasmtime/memfd-allocator"]
 all-arch = ["wasmtime/all-arch"]
 posix-signals-on-macos = ["wasmtime/posix-signals-on-macos"]
 

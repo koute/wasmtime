@@ -162,10 +162,10 @@ struct FaultLocator {
 impl FaultLocator {
     fn new(instances: &InstancePool) -> Self {
         let instances_start = instances.mapping.as_ptr() as usize;
-        let memories_start =
-            instances.memories.mapping.as_ptr() as usize + instances.memories.initial_memory_offset;
-        let memories_end =
-            instances.memories.mapping.as_ptr() as usize + instances.memories.mapping.len();
+        let memories_start = instances.memories.backing.as_mmap().as_ptr() as usize
+            + instances.memories.initial_memory_offset;
+        let memories_end = instances.memories.backing.as_mmap().as_ptr() as usize
+            + instances.memories.backing.as_mmap().len();
 
         // Should always have instances
         debug_assert!(instances_start != 0);
@@ -173,7 +173,7 @@ impl FaultLocator {
         Self {
             instances_start,
             instance_size: instances.instance_size,
-            memories_mapping_start: instances.memories.mapping.as_ptr() as usize,
+            memories_mapping_start: instances.memories.backing.as_mmap().as_ptr() as usize,
             max_instances: instances.max_instances,
             memories_start,
             memories_end,
@@ -379,8 +379,8 @@ impl PageFaultHandler {
             .context("failed to create user fault descriptor")?;
 
         // Register the linear memory pool with the userfault fd
-        let start = instances.memories.mapping.as_ptr();
-        let len = instances.memories.mapping.len();
+        let start = instances.memories.backing.as_mmap().as_ptr();
+        let len = instances.memories.backing.as_mmap().len();
 
         let thread = if !start.is_null() && len > 0 {
             let ioctls = uffd
@@ -476,11 +476,11 @@ mod test {
         assert_eq!(locator.max_instances, 3);
         assert_eq!(
             locator.memories_start,
-            instances.memories.mapping.as_ptr() as usize
+            instances.memories.backing.as_mmap().as_ptr() as usize
         );
         assert_eq!(
             locator.memories_end,
-            locator.memories_start + instances.memories.mapping.len()
+            locator.memories_start + instances.memories.backing.as_mmap().len()
         );
         assert_eq!(locator.memory_size, WASM_PAGE_SIZE * 10);
         assert_eq!(locator.max_memories, 2);

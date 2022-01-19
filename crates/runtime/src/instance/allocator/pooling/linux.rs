@@ -19,6 +19,7 @@ fn decommit(addr: *mut u8, len: usize, protect: bool) -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(feature = "memfd-allocator", allow(dead_code))]
 pub fn commit_memory_pages(addr: *mut u8, len: usize) -> Result<()> {
     if len == 0 {
         return Ok(());
