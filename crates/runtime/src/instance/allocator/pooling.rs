@@ -1813,7 +1813,7 @@ mod test {
         assert_eq!(pool.max_instances, 5);
         assert_eq!(pool.max_wasm_pages, 1);
 
-        let base = pool.mapping.as_ptr() as usize;
+        let base = pool.backing.as_mmap().as_ptr() as usize;
 
         for i in 0..5 {
             let mut iter = pool.get(i);

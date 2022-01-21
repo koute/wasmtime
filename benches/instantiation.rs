@@ -35,8 +35,7 @@ fn bench_parallel(c: &mut Criterion) {
 
     for strategy in common::strategies() {
         let engine = common::make_engine(&strategy, false).unwrap();
-        let (module, linker) =
-            common::load_module(&engine, "benches/instantiation/wasi.wasm").unwrap();
+        let (module, linker) = common::load_module(&engine, "wasi.wasm").unwrap();
 
         for threads in 1..=num_cpus::get_physical() {
             let pool = ThreadPoolBuilder::new()
