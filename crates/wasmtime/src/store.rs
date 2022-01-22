@@ -92,9 +92,10 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use wasmtime_runtime::{
-    InstanceAllocationRequest, InstanceAllocator, InstanceHandle, ModuleInfo,
-    OnDemandInstanceAllocator, SignalHandler, StorePtr, VMCallerCheckedAnyfunc, VMContext,
-    VMExternRef, VMExternRefActivationsTable, VMInterrupts, VMSharedSignatureIndex, VMTrampoline,
+    InstanceAllocationInfo, InstanceAllocationRequest, InstanceAllocator, InstanceHandle,
+    ModuleInfo, OnDemandInstanceAllocator, SignalHandler, StorePtr, VMCallerCheckedAnyfunc,
+    VMContext, VMExternRef, VMExternRefActivationsTable, VMInterrupts, VMSharedSignatureIndex,
+    VMTrampoline,
 };
 
 mod context;
@@ -404,7 +405,6 @@ impl<T> Store<T> {
     /// tables created to 10,000. This can be overridden with the
     /// [`Store::limiter`] configuration method.
     pub fn new(engine: &Engine, data: T) -> Self {
-        let functions = &Default::default();
         // Wasmtime uses the callee argument to host functions to learn about
         // the original pointer to the `Store` itself, allowing it to
         // reconstruct a `StoreContextMut<T>`. When we initially call a `Func`,
@@ -413,18 +413,21 @@ impl<T> Store<T> {
         // part of `Func::call` to guarantee that the `callee: *mut VMContext`
         // is never null.
         let default_callee = unsafe {
+            let info = Arc::new(InstanceAllocationInfo {
+                image_base: 0,
+                functions: Default::default(),
+                shared_signatures: None.into(),
+            });
             OnDemandInstanceAllocator::default()
                 .allocate(InstanceAllocationRequest {
                     host_state: Box::new(()),
-                    image_base: 0,
-                    functions,
-                    shared_signatures: None.into(),
                     imports: Default::default(),
                     module: Arc::new(wasmtime_environ::Module::default()),
                     #[cfg(feature = "memfd-allocator")]
                     memfds: None,
                     store: StorePtr::empty(),
                     wasm_data: &[],
+                    info,
                 })
                 .expect("failed to allocate default callee")
         };

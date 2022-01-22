@@ -64,7 +64,9 @@ use crate::vmcontext::{VMCallerCheckedAnyfunc, VMContext};
 use backtrace::Backtrace;
 use std::mem;
 use std::ptr::{self, NonNull};
-use wasmtime_environ::{DataIndex, ElemIndex, GlobalIndex, MemoryIndex, TableIndex, TrapCode};
+use wasmtime_environ::{
+    DataIndex, ElemIndex, FuncIndex, GlobalIndex, MemoryIndex, TableIndex, TrapCode,
+};
 
 const TOINT_32: f32 = 1.0 / f32::EPSILON;
 const TOINT_64: f64 = 1.0 / f64::EPSILON;
@@ -377,6 +379,15 @@ pub unsafe extern "C" fn wasmtime_memory_init(
     if let Err(trap) = result {
         raise_lib_trap(trap);
     }
+}
+
+/// Implementation of `ref.func`.
+pub unsafe extern "C" fn wasmtime_ref_func(vmctx: *mut VMContext, func_index: u32) -> usize {
+    let instance = (*vmctx).instance();
+    let anyfunc = instance
+        .get_caller_checked_anyfunc(FuncIndex::from_u32(func_index))
+        .unwrap();
+    anyfunc as *const VMCallerCheckedAnyfunc as usize
 }
 
 /// Implementation of `data.drop`.

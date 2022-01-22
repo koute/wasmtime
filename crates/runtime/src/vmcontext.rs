@@ -7,6 +7,7 @@ use std::any::Any;
 use std::cell::UnsafeCell;
 use std::marker;
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 use std::u32;
 use wasmtime_environ::BuiltinFunctionIndex;
@@ -541,7 +542,7 @@ impl Default for VMSharedSignatureIndex {
 #[repr(C)]
 pub struct VMCallerCheckedAnyfunc {
     /// Function body.
-    pub func_ptr: NonNull<VMFunctionBody>,
+    pub func_ptr: *mut VMFunctionBody,
     /// Function signature id.
     pub type_index: VMSharedSignatureIndex,
     /// Function `VMContext`.
@@ -551,6 +552,51 @@ pub struct VMCallerCheckedAnyfunc {
 
 unsafe impl Send for VMCallerCheckedAnyfunc {}
 unsafe impl Sync for VMCallerCheckedAnyfunc {}
+
+impl VMCallerCheckedAnyfunc {
+    pub(crate) fn zero() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+
+    fn func_ptr_atomic(&self) -> &AtomicUsize {
+        unsafe { std::mem::transmute::<&*mut VMFunctionBody, &AtomicUsize>(&self.func_ptr) }
+    }
+
+    fn type_index_atomic(&self) -> &AtomicU32 {
+        unsafe { std::mem::transmute::<&u32, &AtomicU32>(&self.type_index.0) }
+    }
+
+    fn vmctx_atomic(&self) -> &AtomicUsize {
+        unsafe { std::mem::transmute::<&*mut VMContext, &AtomicUsize>(&self.vmctx) }
+    }
+
+    pub(crate) fn is_initialized(&self) -> bool {
+        self.func_ptr_atomic().load(Ordering::Acquire) != 0
+    }
+
+    pub(crate) fn initialize(&self, value: Self) {
+        // Order is very important here: we store the two
+        // non-`func_ptr` fields first, then `func_ptr`, with a
+        // release fence between them.
+        //
+        // This ensures that if one thread observes `is_initialized()
+        // == true`, its accesses of all fields will be valid, even if
+        // it is racing with another thread performing
+        // `initialize()`. Note also that more than one `initialize()`
+        // at a time is safe, and is simply a benign race: all racing
+        // threads will write the same values, and by the time any of
+        // them writes `func_ptr` (which marks the struct as
+        // initialized), at least that thread will have written the
+        // other fields too.
+        self.vmctx_atomic()
+            .store(value.vmctx as usize, Ordering::Relaxed);
+        self.type_index_atomic()
+            .store(value.type_index.0, Ordering::Release);
+        // Release barrier here.
+        self.func_ptr_atomic()
+            .store(value.func_ptr as usize, Ordering::Release);
+    }
+}
 
 #[cfg(test)]
 mod test_vmcaller_checked_anyfunc {
@@ -611,6 +657,7 @@ impl VMBuiltinFunctionsArray {
         ptrs[BuiltinFunctionIndex::memory_copy().index() as usize] = wasmtime_memory_copy as usize;
         ptrs[BuiltinFunctionIndex::memory_fill().index() as usize] = wasmtime_memory_fill as usize;
         ptrs[BuiltinFunctionIndex::memory_init().index() as usize] = wasmtime_memory_init as usize;
+        ptrs[BuiltinFunctionIndex::ref_func().index() as usize] = wasmtime_ref_func as usize;
         ptrs[BuiltinFunctionIndex::data_drop().index() as usize] = wasmtime_data_drop as usize;
         ptrs[BuiltinFunctionIndex::drop_externref().index() as usize] =
             wasmtime_drop_externref as usize;

@@ -160,12 +160,8 @@ where
         let result = invoke_wasm_and_catch_traps(store, |callee| {
             let (anyfunc, ret, params, returned) = &mut captures;
             let anyfunc = anyfunc.as_ref();
-            let result = Params::invoke::<Results>(
-                anyfunc.func_ptr.as_ptr(),
-                anyfunc.vmctx,
-                callee,
-                *params,
-            );
+            let result =
+                Params::invoke::<Results>(anyfunc.func_ptr, anyfunc.vmctx, callee, *params);
             ptr::write(ret.as_mut_ptr(), result);
             *returned = true
         });

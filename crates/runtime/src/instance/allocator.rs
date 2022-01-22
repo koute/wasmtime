@@ -15,7 +15,7 @@ use std::alloc;
 use std::any::Any;
 use std::convert::TryFrom;
 use std::marker;
-use std::ptr::{self, NonNull};
+use std::ptr;
 use std::slice;
 use std::sync::Arc;
 use thiserror::Error;
@@ -36,27 +36,37 @@ pub use self::pooling::{
     InstanceLimits, ModuleLimits, PoolingAllocationStrategy, PoolingInstanceAllocator,
 };
 
-/// Represents a request for a new runtime instance.
-pub struct InstanceAllocationRequest<'a> {
-    /// The module being instantiated.
-    pub module: Arc<Module>,
-
+/// Information needed for the instance allocation request and
+/// afterward as well (for lazy initialization). Will be held alive by
+/// the instance.
+#[derive(Default)]
+pub struct InstanceAllocationInfo {
     /// The base address of where JIT functions are located.
     pub image_base: usize,
+
+    /// Descriptors about each compiled function, such as the offset from
+    /// `image_base`.
+    pub functions: Arc<PrimaryMap<DefinedFuncIndex, FunctionInfo>>,
+
+    /// Translation from `SignatureIndex` to `VMSharedSignatureIndex`
+    pub shared_signatures: SharedSignatures,
+}
+
+/// Represents a request for a new runtime instance.
+pub struct InstanceAllocationRequest<'a> {
+    /// The info needed for both the allocation request and deferred
+    /// initialization.
+    pub info: Arc<InstanceAllocationInfo>,
+
+    /// The module being instantiated.
+    pub module: Arc<Module>,
 
     /// If using MemFD-based memories, the backing MemFDs.
     #[cfg(feature = "memfd-allocator")]
     pub memfds: Option<Arc<ModuleMemFds>>,
 
-    /// Descriptors about each compiled function, such as the offset from
-    /// `image_base`.
-    pub functions: &'a PrimaryMap<DefinedFuncIndex, FunctionInfo>,
-
     /// The imports to use for the instantiation.
     pub imports: Imports<'a>,
-
-    /// Translation from `SignatureIndex` to `VMSharedSignatureIndex`
-    pub shared_signatures: SharedSignatures<'a>,
 
     /// The host state to associate with the instance.
     pub host_state: Box<dyn Any + Send + Sync>,
@@ -222,17 +232,17 @@ pub unsafe trait InstanceAllocator: Send + Sync {
     unsafe fn deallocate_fiber_stack(&self, stack: &wasmtime_fiber::FiberStack);
 }
 
-pub enum SharedSignatures<'a> {
+pub enum SharedSignatures {
     /// Used for instantiating user-defined modules
-    Table(&'a PrimaryMap<SignatureIndex, VMSharedSignatureIndex>),
+    Table(PrimaryMap<SignatureIndex, VMSharedSignatureIndex>),
     /// Used for instance creation that has only a single function
     Always(VMSharedSignatureIndex),
     /// Used for instance creation that has no functions
     None,
 }
 
-impl SharedSignatures<'_> {
-    fn lookup(&self, index: SignatureIndex) -> VMSharedSignatureIndex {
+impl SharedSignatures {
+    pub(crate) fn lookup(&self, index: SignatureIndex) -> VMSharedSignatureIndex {
         match self {
             SharedSignatures::Table(table) => table[index],
             SharedSignatures::Always(index) => *index,
@@ -241,14 +251,20 @@ impl SharedSignatures<'_> {
     }
 }
 
-impl<'a> From<VMSharedSignatureIndex> for SharedSignatures<'a> {
-    fn from(val: VMSharedSignatureIndex) -> SharedSignatures<'a> {
+impl std::default::Default for SharedSignatures {
+    fn default() -> Self {
+        SharedSignatures::None
+    }
+}
+
+impl From<VMSharedSignatureIndex> for SharedSignatures {
+    fn from(val: VMSharedSignatureIndex) -> SharedSignatures {
         SharedSignatures::Always(val)
     }
 }
 
-impl<'a> From<Option<VMSharedSignatureIndex>> for SharedSignatures<'a> {
-    fn from(val: Option<VMSharedSignatureIndex>) -> SharedSignatures<'a> {
+impl From<Option<VMSharedSignatureIndex>> for SharedSignatures {
+    fn from(val: Option<VMSharedSignatureIndex>) -> SharedSignatures {
         match val {
             Some(idx) => SharedSignatures::Always(idx),
             None => SharedSignatures::None,
@@ -256,9 +272,9 @@ impl<'a> From<Option<VMSharedSignatureIndex>> for SharedSignatures<'a> {
     }
 }
 
-impl<'a> From<&'a PrimaryMap<SignatureIndex, VMSharedSignatureIndex>> for SharedSignatures<'a> {
-    fn from(val: &'a PrimaryMap<SignatureIndex, VMSharedSignatureIndex>) -> SharedSignatures<'a> {
-        SharedSignatures::Table(val)
+impl From<&PrimaryMap<SignatureIndex, VMSharedSignatureIndex>> for SharedSignatures {
+    fn from(val: &PrimaryMap<SignatureIndex, VMSharedSignatureIndex>) -> SharedSignatures {
+        SharedSignatures::Table(val.clone())
     }
 }
 
@@ -506,7 +522,7 @@ unsafe fn initialize_vmcontext(instance: &mut Instance, req: InstanceAllocationR
     let mut ptr = instance.vmctx_plus_offset(instance.offsets.vmctx_signature_ids_begin());
     for sig in module.types.values() {
         *ptr = match sig {
-            ModuleType::Function(sig) => req.shared_signatures.lookup(*sig),
+            ModuleType::Function(sig) => req.info.shared_signatures.lookup(*sig),
             _ => VMSharedSignatureIndex::new(u32::max_value()),
         };
         ptr = ptr.add(1);
@@ -544,32 +560,10 @@ unsafe fn initialize_vmcontext(instance: &mut Instance, req: InstanceAllocationR
         req.imports.globals.len(),
     );
 
-    // Initialize the functions
-    let mut base = instance.anyfunc_base();
-    for (index, sig) in instance.module.functions.iter() {
-        let type_index = req.shared_signatures.lookup(*sig);
-
-        let (func_ptr, vmctx) = if let Some(def_index) = instance.module.defined_func_index(index) {
-            (
-                NonNull::new((req.image_base + req.functions[def_index].start as usize) as *mut _)
-                    .unwrap(),
-                instance.vmctx_ptr(),
-            )
-        } else {
-            let import = instance.imported_function(index);
-            (import.body, import.vmctx)
-        };
-
-        ptr::write(
-            base,
-            VMCallerCheckedAnyfunc {
-                func_ptr,
-                type_index,
-                vmctx,
-            },
-        );
-        base = base.add(1);
-    }
+    // Zero the anyfuncs -- they will be lazily initialized as requred
+    let base = instance.anyfunc_base();
+    let anyfuncs = std::slice::from_raw_parts_mut(base, instance.module.functions.len());
+    anyfuncs.fill(VMCallerCheckedAnyfunc::zero());
 
     // Initialize the defined tables
     let mut ptr = instance.vmctx_plus_offset(instance.offsets.vmctx_tables_begin());
@@ -725,6 +719,7 @@ unsafe impl InstanceAllocator for OnDemandInstanceAllocator {
         let mut handle = {
             let instance = Instance {
                 module: req.module.clone(),
+                info: req.info.clone(),
                 offsets: VMOffsets::new(HostPtr, &req.module),
                 memories,
                 tables,

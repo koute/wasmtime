@@ -13,6 +13,7 @@ use super::{
 };
 #[cfg(feature = "memfd-allocator")]
 use crate::memfd::{MemoryMemFd, ModuleMemFds};
+use crate::InstanceAllocationInfo;
 use crate::{instance::Instance, Memory, Mmap, Table, VMContext};
 use anyhow::{anyhow, bail, Context, Result};
 use rand::Rng;
@@ -367,6 +368,7 @@ impl InstancePool {
                 instance as _,
                 Instance {
                     module: self.empty_module.clone(),
+                    info: Arc::new(InstanceAllocationInfo::default()),
                     offsets: VMOffsets::new(HostPtr, &self.empty_module),
                     memories: PrimaryMap::with_capacity(limits.memories as usize),
                     tables: PrimaryMap::with_capacity(limits.tables as usize),
@@ -390,6 +392,7 @@ impl InstancePool {
         let instance = self.instance(index);
 
         instance.module = req.module.clone();
+        instance.info = req.info.clone();
         instance.offsets = VMOffsets::new(HostPtr, instance.module.as_ref());
         instance.host_state = std::mem::replace(&mut req.host_state, Box::new(()));
         instance.wasm_data = &*req.wasm_data;

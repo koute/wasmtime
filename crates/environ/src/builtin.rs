@@ -18,6 +18,8 @@ macro_rules! foreach_builtin_function {
             memory_fill(vmctx, i32, i64, i32, i64) -> ();
             /// Returns an index for wasm's `memory.init` instruction.
             memory_init(vmctx, i32, i32, i64, i32, i32) -> ();
+            /// Returns a value for wasm's `ref.func` instruction.
+            ref_func(vmctx, i32) -> (pointer);
             /// Returns an index for wasm's `data.drop` instruction.
             data_drop(vmctx, i32) -> ();
             /// Returns an index for Wasm's `table.grow` instruction for `funcref`s.

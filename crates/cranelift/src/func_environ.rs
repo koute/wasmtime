@@ -1248,10 +1248,16 @@ impl<'module_environment> cranelift_wasm::FuncEnvironment for FuncEnvironment<'m
         mut pos: cranelift_codegen::cursor::FuncCursor<'_>,
         func_index: FuncIndex,
     ) -> WasmResult<ir::Value> {
-        let vmctx = self.vmctx(&mut pos.func);
-        let vmctx = pos.ins().global_value(self.pointer_type(), vmctx);
-        let offset = self.offsets.vmctx_anyfunc(func_index);
-        Ok(pos.ins().iadd_imm(vmctx, i64::from(offset)))
+        let func_index = pos.ins().iconst(I32, func_index.as_u32() as i64);
+        let builtin_index = BuiltinFunctionIndex::ref_func();
+        let builtin_sig = self.builtin_function_signatures.ref_func(&mut pos.func);
+        let (vmctx, builtin_addr) =
+            self.translate_load_builtin_function_address(&mut pos, builtin_index);
+
+        let call_inst = pos
+            .ins()
+            .call_indirect(builtin_sig, builtin_addr, &[vmctx, func_index]);
+        Ok(pos.func.dfg.first_result(call_inst))
     }
 
     fn translate_custom_global_get(

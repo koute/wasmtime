@@ -54,6 +54,9 @@ pub(crate) struct Instance {
     /// The `Module` this `Instance` was instantiated from.
     module: Arc<Module>,
 
+    /// The instantiation info needed for deferred initialization.
+    info: Arc<InstanceAllocationInfo>,
+
     /// Offsets in the `vmctx` region, precomputed from the `module` above.
     offsets: VMOffsets<HostPtr>,
 
@@ -433,6 +436,32 @@ impl Instance {
         Layout::from_size_align(size, align).unwrap()
     }
 
+    /// Construct a new VMCallerCheckedAnyfunc for the given function
+    /// (imported or defined in this module). Used during lazy
+    /// initialization the first time the VMCallerCheckedAnyfunc in
+    /// the VMContext is referenced; written into place in a careful
+    /// atomic way by `get_caller_checked_anyfunc()` below.
+    fn construct_anyfunc(&self, index: FuncIndex) -> VMCallerCheckedAnyfunc {
+        let sig = self.module.functions[index];
+        let type_index = self.info.shared_signatures.lookup(sig);
+
+        let (func_ptr, vmctx) = if let Some(def_index) = self.module.defined_func_index(index) {
+            (
+                (self.info.image_base + self.info.functions[def_index].start as usize) as *mut _,
+                self.vmctx_ptr(),
+            )
+        } else {
+            let import = self.imported_function(index);
+            (import.body.as_ptr(), import.vmctx)
+        };
+
+        VMCallerCheckedAnyfunc {
+            func_ptr,
+            type_index,
+            vmctx,
+        }
+    }
+
     /// Get a `&VMCallerCheckedAnyfunc` for the given `FuncIndex`.
     ///
     /// Returns `None` if the index is the reserved index value.
@@ -447,7 +476,16 @@ impl Instance {
             return None;
         }
 
-        unsafe { Some(&*self.vmctx_plus_offset(self.offsets.vmctx_anyfunc(index))) }
+        unsafe {
+            let anyfunc = self
+                .vmctx_plus_offset::<VMCallerCheckedAnyfunc>(self.offsets.vmctx_anyfunc(index))
+                .as_ref()
+                .unwrap();
+            if !anyfunc.is_initialized() {
+                anyfunc.initialize(self.construct_anyfunc(index));
+            }
+            Some(anyfunc)
+        }
     }
 
     unsafe fn anyfunc_base(&self) -> *mut VMCallerCheckedAnyfunc {
@@ -513,6 +551,7 @@ impl Instance {
                             ptr::null_mut()
                         } else {
                             debug_assert!(idx.as_u32() < self.offsets.num_defined_functions);
+                            self.get_caller_checked_anyfunc(*idx);  // Force lazy init
                             base.add(usize::try_from(idx.as_u32()).unwrap())
                         }
                     }),

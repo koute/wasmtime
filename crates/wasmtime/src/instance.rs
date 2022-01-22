@@ -15,8 +15,8 @@ use wasmtime_environ::{
 };
 use wasmtime_jit::TypeTables;
 use wasmtime_runtime::{
-    Imports, InstanceAllocationRequest, InstantiationError, StorePtr, VMContext, VMFunctionBody,
-    VMFunctionImport, VMGlobalImport, VMMemoryImport, VMTableImport,
+    Imports, InstanceAllocationInfo, InstanceAllocationRequest, InstantiationError, StorePtr,
+    VMContext, VMFunctionBody, VMFunctionImport, VMGlobalImport, VMMemoryImport, VMTableImport,
 };
 
 /// An instantiated WebAssembly module.
@@ -710,18 +710,23 @@ impl<'a> Instantiator<'a> {
             // this instance, so we determine what the ID is and then assert
             // it's the same later when we do actually insert it.
             let instance_to_be = store.store_data().next_id::<InstanceData>();
+
+            let info = Arc::new(InstanceAllocationInfo {
+                image_base: compiled_module.code().as_ptr() as usize,
+                functions: compiled_module.functions().clone(),
+                shared_signatures: self.cur.module.signatures().as_module_map().into(),
+            });
+
             let mut instance_handle =
                 store
                     .engine()
                     .allocator()
                     .allocate(InstanceAllocationRequest {
                         module: compiled_module.module().clone(),
+                        info,
                         #[cfg(feature = "memfd-allocator")]
                         memfds: Some(memfds),
-                        image_base: compiled_module.code().as_ptr() as usize,
-                        functions: compiled_module.functions(),
                         imports: self.cur.build(),
-                        shared_signatures: self.cur.module.signatures().as_module_map().into(),
                         host_state: Box::new(Instance(instance_to_be)),
                         store: StorePtr::new(store.traitobj()),
                         wasm_data: compiled_module.wasm_data(),
@@ -838,9 +843,7 @@ impl<'a> Instantiator<'a> {
                 mem::transmute::<
                     *const VMFunctionBody,
                     unsafe extern "C" fn(*mut VMContext, *mut VMContext),
-                >(f.anyfunc.as_ref().func_ptr.as_ptr())(
-                    f.anyfunc.as_ref().vmctx, vmctx
-                )
+                >(f.anyfunc.as_ref().func_ptr)(f.anyfunc.as_ref().vmctx, vmctx)
             })?;
         }
         Ok(())

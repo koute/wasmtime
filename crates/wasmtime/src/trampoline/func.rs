@@ -8,7 +8,7 @@ use std::sync::Arc;
 use wasmtime_environ::{EntityIndex, Module, ModuleType, PrimaryMap, SignatureIndex};
 use wasmtime_jit::{CodeMemory, MmapVec, ProfilingAgent};
 use wasmtime_runtime::{
-    Imports, InstanceAllocationRequest, InstanceAllocator, InstanceHandle,
+    Imports, InstanceAllocationInfo, InstanceAllocationRequest, InstanceAllocator, InstanceHandle,
     OnDemandInstanceAllocator, StorePtr, VMContext, VMFunctionBody, VMSharedSignatureIndex,
     VMTrampoline,
 };
@@ -158,18 +158,21 @@ pub unsafe fn create_raw_function(
         .exports
         .insert(String::new(), EntityIndex::Function(func_id));
 
+    let info = Arc::new(InstanceAllocationInfo {
+        functions: Arc::new(functions),
+        image_base: (*func).as_ptr() as usize,
+        shared_signatures: sig.into(),
+    });
     Ok(
         OnDemandInstanceAllocator::default().allocate(InstanceAllocationRequest {
             module: Arc::new(module),
             #[cfg(feature = "memfd-allocator")]
             memfds: None,
-            functions: &functions,
-            image_base: (*func).as_ptr() as usize,
             imports: Imports::default(),
-            shared_signatures: sig.into(),
             host_state,
             store: StorePtr::empty(),
             wasm_data: &[],
+            info,
         })?,
     )
 }

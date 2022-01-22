@@ -42,8 +42,8 @@ pub use crate::export::*;
 pub use crate::externref::*;
 pub use crate::imports::Imports;
 pub use crate::instance::{
-    InstanceAllocationRequest, InstanceAllocator, InstanceHandle, InstantiationError, LinkError,
-    OnDemandInstanceAllocator, StorePtr,
+    InstanceAllocationInfo, InstanceAllocationRequest, InstanceAllocator, InstanceHandle,
+    InstantiationError, LinkError, OnDemandInstanceAllocator, StorePtr,
 };
 #[cfg(feature = "pooling-allocator")]
 pub use crate::instance::{

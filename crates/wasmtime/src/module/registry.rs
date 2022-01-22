@@ -95,7 +95,7 @@ impl ModuleRegistry {
 
     /// Looks up a trampoline from an anyfunc.
     pub fn lookup_trampoline(&self, anyfunc: &VMCallerCheckedAnyfunc) -> Option<VMTrampoline> {
-        let module = self.module(anyfunc.func_ptr.as_ptr() as usize)?;
+        let module = self.module(anyfunc.func_ptr as usize)?;
         module.signatures.trampoline(anyfunc.type_index)
     }
 }

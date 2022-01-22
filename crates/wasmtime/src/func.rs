@@ -754,7 +754,7 @@ impl Func {
             trampoline(
                 (*anyfunc.as_ptr()).vmctx,
                 callee,
-                (*anyfunc.as_ptr()).func_ptr.as_ptr(),
+                (*anyfunc.as_ptr()).func_ptr,
                 params_and_returns,
             )
         })
@@ -947,7 +947,7 @@ impl Func {
         unsafe {
             let f = self.caller_checked_anyfunc(store);
             VMFunctionImport {
-                body: f.as_ref().func_ptr,
+                body: NonNull::new(f.as_ref().func_ptr).unwrap(),
                 vmctx: f.as_ref().vmctx,
             }
         }

@@ -1,3 +1,5 @@
+use std::ptr::NonNull;
+
 use crate::store::{InstanceId, StoreOpaque};
 use crate::trampoline::create_handle;
 use crate::{GlobalType, Mutability, Val};
@@ -51,7 +53,7 @@ pub fn create_global(store: &mut StoreOpaque, gt: &GlobalType, val: Val) -> Resu
                     });
 
                 func_imports.push(VMFunctionImport {
-                    body: f.func_ptr,
+                    body: NonNull::new(f.func_ptr).unwrap(),
                     vmctx: f.vmctx,
                 });
 

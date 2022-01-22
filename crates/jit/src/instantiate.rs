@@ -245,7 +245,7 @@ pub struct CompiledModule {
     address_map_data: Range<usize>,
     trap_data: Range<usize>,
     module: Arc<Module>,
-    funcs: PrimaryMap<DefinedFuncIndex, FunctionInfo>,
+    funcs: Arc<PrimaryMap<DefinedFuncIndex, FunctionInfo>>,
     trampolines: Vec<Trampoline>,
     meta: Metadata,
     code: Range<usize>,
@@ -304,7 +304,7 @@ impl CompiledModule {
 
         let mut ret = Self {
             module: Arc::new(info.module),
-            funcs: info.funcs,
+            funcs: Arc::new(info.funcs),
             trampolines: info.trampolines,
             wasm_data: subslice_range(section(ELF_WASM_DATA)?, code.mmap),
             address_map_data: code
@@ -387,7 +387,7 @@ impl CompiledModule {
     }
 
     /// Returns the `FunctionInfo` map for all defined functions.
-    pub fn functions(&self) -> &PrimaryMap<DefinedFuncIndex, FunctionInfo> {
+    pub fn functions(&self) -> &Arc<PrimaryMap<DefinedFuncIndex, FunctionInfo>> {
         &self.funcs
     }
 

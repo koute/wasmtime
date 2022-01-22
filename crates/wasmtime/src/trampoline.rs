@@ -17,10 +17,7 @@ use anyhow::Result;
 use std::any::Any;
 use std::sync::Arc;
 use wasmtime_environ::{EntityIndex, GlobalIndex, MemoryIndex, Module, TableIndex};
-use wasmtime_runtime::{
-    Imports, InstanceAllocationRequest, InstanceAllocator, OnDemandInstanceAllocator, StorePtr,
-    VMFunctionImport, VMSharedSignatureIndex,
-};
+use wasmtime_runtime::{Imports, InstanceAllocationInfo, InstanceAllocationRequest, InstanceAllocator, OnDemandInstanceAllocator, StorePtr, VMFunctionImport, VMSharedSignatureIndex};
 
 fn create_handle(
     module: Module,
@@ -31,7 +28,7 @@ fn create_handle(
 ) -> Result<InstanceId> {
     let mut imports = Imports::default();
     imports.functions = func_imports;
-    let functions = &Default::default();
+    let functions = Default::default();
 
     unsafe {
         let config = store.engine().config();
@@ -43,13 +40,15 @@ fn create_handle(
                 module: Arc::new(module),
                 #[cfg(feature = "memfd-allocator")]
                 memfds: None,
-                functions,
-                image_base: 0,
                 imports,
-                shared_signatures: shared_signature_id.into(),
                 host_state,
                 store: StorePtr::new(store.traitobj()),
                 wasm_data: &[],
+                info: Arc::new(InstanceAllocationInfo {
+                    functions,
+                    image_base: 0,
+                    shared_signatures: shared_signature_id.into(),
+                }),
             },
         )?;
 
