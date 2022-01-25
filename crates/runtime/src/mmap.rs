@@ -52,6 +52,7 @@ impl Mmap {
         is_writable: bool,
         mapping_len: Option<usize>,
         mapping_addr: Option<usize>,
+        file_offset: usize,
     ) -> Result<Self> {
         let len = match mapping_len {
             Some(given_len) => given_len,
@@ -75,8 +76,15 @@ impl Mmap {
         };
         let requested_addr = mapping_addr.unwrap_or(0) as *mut _;
         let ptr = unsafe {
-            rustix::io::mmap(requested_addr, len, prot_flags, map_flags, file, 0)
-                .context(format!("mmap failed to allocate {:#x} bytes", len))?
+            rustix::io::mmap(
+                requested_addr,
+                len,
+                prot_flags,
+                map_flags,
+                file,
+                file_offset as u64,
+            )
+            .context(format!("mmap failed to allocate {:#x} bytes", len))?
         };
 
         Ok(Self {
@@ -101,7 +109,7 @@ impl Mmap {
             let file = File::open(path).context("failed to open file")?;
             let mut ret = Self::from_open_file(
                 &file, /* is_writable = */ false, /* len = */ None,
-                /* addr = */ None,
+                /* addr = */ None, /* file_offset = */ 0,
             )?;
             ret.file = Some(file);
             Ok(ret)

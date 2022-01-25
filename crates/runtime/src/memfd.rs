@@ -37,7 +37,15 @@ impl ModuleMemFds {
 #[derive(Debug)]
 pub(crate) struct MemoryMemFd {
     pub(crate) fd: Memfd,
+    /// Length of image. Note that initial memory size may be larger;
+    /// leading and trailing zeroes are truncated (handled by
+    /// anonymous backing memfd).
     pub(crate) len: usize,
+    /// Image starts this many bytes into heap space. Note that the
+    /// memfd's offsets are always equal to the heap offsets, so we
+    /// map at an offset into the fd as well. (This simplifies
+    /// construction.)
+    pub(crate) offset: usize,
 }
 
 impl MemFdRegistry {
@@ -182,6 +190,35 @@ impl MemFdRegistry {
                 }
             }
 
+            // Now determine the limits of nonzero data.
+            let mut page_data = vec![0; page_size];
+            let mut page_is_nonzero = |page| {
+                let offset = (page_size * page) as u64;
+                file.read_at(&mut page_data[..], offset).unwrap();
+                page_data.iter().any(|byte| *byte != 0)
+            };
+            let n_pages = size / page_size;
+
+            let mut offset = 0;
+            for page in 0..n_pages {
+                if page_is_nonzero(page) {
+                    break;
+                }
+                offset += page_size;
+            }
+            let len = if offset == size {
+                0
+            } else {
+                let mut len = 0;
+                for page in (0..n_pages).rev() {
+                    if page_is_nonzero(page) {
+                        len = (page + 1) * page_size - offset;
+                        break;
+                    }
+                }
+                len
+            };
+
             // Seal the memfd's data and length.
             memfd.add_seal(memfd::FileSeal::SealGrow)?;
             memfd.add_seal(memfd::FileSeal::SealShrink)?;
@@ -190,7 +227,8 @@ impl MemFdRegistry {
 
             memories[defined_memory] = Some(Arc::new(MemoryMemFd {
                 fd: memfd,
-                len: size,
+                offset,
+                len,
             }));
         }
 

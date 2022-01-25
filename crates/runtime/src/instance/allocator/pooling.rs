@@ -744,6 +744,7 @@ impl MemFDSlot {
             /* is_writable = */ true,
             /* len = */ Some(static_size),
             /* addr = */ None,
+            /* file_offset = */ 0,
         )
         .map_err(|e| InstantiationError::Resource(e.into()))?;
         Ok(MemFDSlot {
@@ -809,6 +810,7 @@ impl MemFDSlot {
                 /* is_writable = */ true,
                 /* len = */ Some(self.static_size),
                 /* addr = */ None,
+                /* file_offset = */ 0,
             )
             .map_err(|e| InstantiationError::Resource(e.into()))?;
             self.base = extension_map.as_ptr() as usize;
@@ -818,28 +820,31 @@ impl MemFDSlot {
         // Now, we have just the anon backing; we can map the new
         // image on top of it.
         if let Some(image) = maybe_image {
-            let image = image.clone();
-            let image_map = Mmap::from_open_file(
-                &image.fd.as_file(),
-                /* is_writable = */ true,
-                /* len = */ Some(image.len),
-                /* addr = */ Some(self.base),
-            )
-            .map_err(|e| InstantiationError::Resource(e.into()))?;
-            assert_eq!(
-                image_map.as_ptr() as usize,
-                self.extension_map.as_ref().unwrap().as_ptr() as usize
-            );
+            if image.len > 0 {
+                let image = image.clone();
+                let image_map = Mmap::from_open_file(
+                    &image.fd.as_file(),
+                    /* is_writable = */ true,
+                    /* len = */ Some(image.len),
+                    /* addr = */ Some(self.base + image.offset),
+                    /* file_offset = */ image.offset,
+                )
+                .map_err(|e| InstantiationError::Resource(e.into()))?;
+                assert_eq!(
+                    image_map.as_ptr() as usize,
+                    self.extension_map.as_ref().unwrap().as_ptr() as usize + image.offset
+                );
 
-            // Alter the extension_map mapping so that it doesn't
-            // double-munmap the space covered both the original
-            // backing and this image mmap.
-            unsafe {
-                self.extension_map.as_mut().unwrap().alter_base(image.len);
+                // Alter the extension_map mapping so that it doesn't
+                // double-munmap the space covered both the original
+                // backing and this image mmap.
+                unsafe {
+                    self.extension_map.as_mut().unwrap().alter_base(image.len);
+                }
+
+                self.image = Some(image);
+                self.image_map = Some(image_map);
             }
-
-            self.image = Some(image);
-            self.image_map = Some(image_map);
         }
 
         self.dirty = true;
@@ -879,6 +884,7 @@ impl MemFDSlot {
             /* is_writable = */ true,
             /* len = */ Some(self.static_size),
             /* addr = */ None,
+            /* file_offset = */ 0,
         )
         .map_err(|e| InstantiationError::Resource(e.into()))?;
         self.base = extension_map.as_ptr() as usize;
