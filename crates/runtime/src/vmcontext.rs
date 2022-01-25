@@ -554,10 +554,6 @@ unsafe impl Send for VMCallerCheckedAnyfunc {}
 unsafe impl Sync for VMCallerCheckedAnyfunc {}
 
 impl VMCallerCheckedAnyfunc {
-    pub(crate) fn zero() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
-
     fn func_ptr_atomic(&self) -> &AtomicUsize {
         unsafe { std::mem::transmute::<&*mut VMFunctionBody, &AtomicUsize>(&self.func_ptr) }
     }
@@ -568,10 +564,6 @@ impl VMCallerCheckedAnyfunc {
 
     fn vmctx_atomic(&self) -> &AtomicUsize {
         unsafe { std::mem::transmute::<&*mut VMContext, &AtomicUsize>(&self.vmctx) }
-    }
-
-    pub(crate) fn is_initialized(&self) -> bool {
-        self.func_ptr_atomic().load(Ordering::Acquire) != 0
     }
 
     pub(crate) fn initialize(&self, value: Self) {
