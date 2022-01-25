@@ -50,6 +50,7 @@ impl Mmap {
     pub fn from_open_file(
         file: &File,
         is_writable: bool,
+        is_cow: bool,
         mapping_len: Option<usize>,
         mapping_addr: Option<usize>,
         file_offset: usize,
@@ -69,10 +70,11 @@ impl Mmap {
         } else {
             rustix::io::ProtFlags::READ
         };
-        let map_flags = if mapping_addr.is_some() {
-            rustix::io::MapFlags::PRIVATE | rustix::io::MapFlags::FIXED
-        } else {
-            rustix::io::MapFlags::PRIVATE
+        let map_flags = match (mapping_addr.is_some(), is_cow) {
+            (true, true) => rustix::io::MapFlags::FIXED | rustix::io::MapFlags::PRIVATE,
+            (true, false) => rustix::io::MapFlags::FIXED | rustix::io::MapFlags::SHARED,
+            (false, true) => rustix::io::MapFlags::PRIVATE,
+            (false, false) => rustix::io::MapFlags::SHARED,
         };
         let requested_addr = mapping_addr.unwrap_or(0) as *mut _;
         let ptr = unsafe {
@@ -108,8 +110,8 @@ impl Mmap {
         {
             let file = File::open(path).context("failed to open file")?;
             let mut ret = Self::from_open_file(
-                &file, /* is_writable = */ false, /* len = */ None,
-                /* addr = */ None, /* file_offset = */ 0,
+                &file, /* is_writable = */ false, /* is_cow = */ true,
+                /* len = */ None, /* addr = */ None, /* file_offset = */ 0,
             )?;
             ret.file = Some(file);
             Ok(ret)

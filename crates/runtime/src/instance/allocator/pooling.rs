@@ -742,6 +742,7 @@ impl MemFDSlot {
         let extension_map = Mmap::from_open_file(
             &extension_file,
             /* is_writable = */ true,
+            /* is_cow = */ false,
             /* len = */ Some(static_size),
             /* addr = */ None,
             /* file_offset = */ 0,
@@ -780,12 +781,10 @@ impl MemFDSlot {
 
         // Regardless of the code-path below, we need the backing file
         // to be the right size.
-        if initial_size_bytes != self.heap_limit {
-            self.extension_file
-                .set_len(initial_size_bytes as u64)
-                .map_err(|e| InstantiationError::Resource(e.into()))?;
-            self.heap_limit = initial_size_bytes;
-        }
+        self.extension_file
+            .set_len(initial_size_bytes as u64)
+            .map_err(|e| InstantiationError::Resource(e.into()))?;
+        self.heap_limit = initial_size_bytes;
 
         if let &Some(ref existing_image) = &self.image {
             // Fast-path: previously instantiated with the same image, so
@@ -808,6 +807,7 @@ impl MemFDSlot {
             let extension_map = Mmap::from_open_file(
                 &self.extension_file,
                 /* is_writable = */ true,
+                /* is_cow = */ false,
                 /* len = */ Some(self.static_size),
                 /* addr = */ None,
                 /* file_offset = */ 0,
@@ -825,6 +825,7 @@ impl MemFDSlot {
                 let image_map = Mmap::from_open_file(
                     &image.fd.as_file(),
                     /* is_writable = */ true,
+                    /* is_cow = */ true,
                     /* len = */ Some(image.len),
                     /* addr = */ Some(self.base + image.offset),
                     /* file_offset = */ image.offset,
@@ -864,6 +865,11 @@ impl MemFDSlot {
                 rustix::io::Advice::LinuxDontNeed,
             )?;
         }
+        // truncate the extension file down to zero bytes to throw away all data.
+        self.extension_file
+            .set_len(0)
+            .map_err(|e| InstantiationError::Resource(e.into()))?;
+        self.heap_limit = 0;
         self.dirty = false;
         Ok(())
     }
@@ -882,6 +888,7 @@ impl MemFDSlot {
         let extension_map = Mmap::from_open_file(
             &self.extension_file,
             /* is_writable = */ true,
+            /* is_cow = */ false,
             /* len = */ Some(self.static_size),
             /* addr = */ None,
             /* file_offset = */ 0,
