@@ -16,6 +16,7 @@ use crate::memfd::{MemoryMemFd, ModuleMemFds};
 use crate::InstanceAllocationInfo;
 use crate::{instance::Instance, Memory, Mmap, Table, VMContext};
 use anyhow::{anyhow, bail, Context, Result};
+#[cfg(feature = "memfd-allocator")]
 use libc::c_void;
 use rand::Rng;
 #[cfg(feature = "memfd-allocator")]
