@@ -17,7 +17,10 @@ use anyhow::Result;
 use std::any::Any;
 use std::sync::Arc;
 use wasmtime_environ::{EntityIndex, GlobalIndex, MemoryIndex, Module, TableIndex};
-use wasmtime_runtime::{Imports, InstanceAllocationInfo, InstanceAllocationRequest, InstanceAllocator, OnDemandInstanceAllocator, StorePtr, VMFunctionImport, VMSharedSignatureIndex};
+use wasmtime_runtime::{
+    Imports, InstanceAllocationInfo, InstanceAllocationRequest, InstanceAllocator,
+    OnDemandInstanceAllocator, StorePtr, VMFunctionImport, VMSharedSignatureIndex,
+};
 
 fn create_handle(
     module: Module,

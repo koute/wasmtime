@@ -232,6 +232,7 @@ pub unsafe trait InstanceAllocator: Send + Sync {
     unsafe fn deallocate_fiber_stack(&self, stack: &wasmtime_fiber::FiberStack);
 }
 
+/// Shared signatures.
 pub enum SharedSignatures {
     /// Used for instantiating user-defined modules
     Table(PrimaryMap<SignatureIndex, VMSharedSignatureIndex>),

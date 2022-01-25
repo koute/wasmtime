@@ -551,7 +551,7 @@ impl Instance {
                             ptr::null_mut()
                         } else {
                             debug_assert!(idx.as_u32() < self.offsets.num_defined_functions);
-                            self.get_caller_checked_anyfunc(*idx);  // Force lazy init
+                            self.get_caller_checked_anyfunc(*idx); // Force lazy init
                             base.add(usize::try_from(idx.as_u32()).unwrap())
                         }
                     }),

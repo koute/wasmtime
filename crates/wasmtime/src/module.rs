@@ -11,6 +11,7 @@ use std::sync::Arc;
 use wasmparser::{Parser, ValidPayload, Validator};
 use wasmtime_environ::{ModuleEnvironment, ModuleIndex, PrimaryMap};
 use wasmtime_jit::{CompiledModule, CompiledModuleInfo, MmapVec, TypeTables};
+use wasmtime_runtime::InstanceAllocationInfo;
 
 mod registry;
 mod serialization;
@@ -107,6 +108,8 @@ struct ModuleInner {
     types: Arc<TypeTables>,
     /// Registered shared signature for the module.
     signatures: Arc<SignatureCollection>,
+    /// InstanceAllocationInfo shared by all instantiated modules, used for lazy initialization.
+    alloc_info: Arc<InstanceAllocationInfo>,
 }
 
 impl Module {
@@ -493,6 +496,17 @@ impl Module {
         module.into_module(engine)
     }
 
+    fn create_alloc_info(
+        module: &CompiledModule,
+        sigs: &SignatureCollection,
+    ) -> Arc<InstanceAllocationInfo> {
+        Arc::new(InstanceAllocationInfo {
+            image_base: module.code().as_ptr() as usize,
+            functions: module.functions().clone(),
+            shared_signatures: sigs.as_module_map().into(),
+        })
+    }
+
     fn from_parts(
         engine: &Engine,
         mut modules: Vec<Arc<CompiledModule>>,
@@ -512,6 +526,8 @@ impl Module {
         ));
 
         let module = modules.remove(main_module);
+
+        let alloc_info = Module::create_alloc_info(&module, &signatures);
 
         let module_upvars = module_upvars
             .iter()
@@ -536,6 +552,7 @@ impl Module {
                 artifact_upvars: modules,
                 module_upvars,
                 signatures,
+                alloc_info,
             }),
         });
 
@@ -548,6 +565,7 @@ impl Module {
             module_upvars: &[serialization::SerializedModuleUpvar],
             signatures: &Arc<SignatureCollection>,
         ) -> Result<Module> {
+            let alloc_info = Module::create_alloc_info(&artifacts[module_index], signatures);
             Ok(Module {
                 inner: Arc::new(ModuleInner {
                     engine: engine.clone(),
@@ -572,6 +590,7 @@ impl Module {
                         })
                         .collect::<Result<Vec<_>>>()?,
                     signatures: signatures.clone(),
+                    alloc_info,
                 }),
             })
         }
@@ -672,6 +691,10 @@ impl Module {
         module_upvars: &[wasmtime_environ::ModuleUpvar],
         modules: &PrimaryMap<ModuleIndex, Module>,
     ) -> Module {
+        let alloc_info = Module::create_alloc_info(
+            &self.inner.artifact_upvars[artifact_index],
+            &self.inner.signatures,
+        );
         Module {
             inner: Arc::new(ModuleInner {
                 types: self.inner.types.clone(),
@@ -691,6 +714,7 @@ impl Module {
                     })
                     .collect(),
                 signatures: self.inner.signatures.clone(),
+                alloc_info,
             }),
         }
     }
@@ -709,6 +733,10 @@ impl Module {
 
     pub(crate) fn signatures(&self) -> &Arc<SignatureCollection> {
         &self.inner.signatures
+    }
+
+    pub(crate) fn alloc_info(&self) -> &Arc<InstanceAllocationInfo> {
+        &self.inner.alloc_info
     }
 
     /// Looks up the module upvar value at the `index` specified.

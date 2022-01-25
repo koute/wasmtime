@@ -15,8 +15,8 @@ use wasmtime_environ::{
 };
 use wasmtime_jit::TypeTables;
 use wasmtime_runtime::{
-    Imports, InstanceAllocationInfo, InstanceAllocationRequest, InstantiationError, StorePtr,
-    VMContext, VMFunctionBody, VMFunctionImport, VMGlobalImport, VMMemoryImport, VMTableImport,
+    Imports, InstanceAllocationRequest, InstantiationError, StorePtr, VMContext, VMFunctionBody,
+    VMFunctionImport, VMGlobalImport, VMMemoryImport, VMTableImport,
 };
 
 /// An instantiated WebAssembly module.
@@ -711,19 +711,13 @@ impl<'a> Instantiator<'a> {
             // it's the same later when we do actually insert it.
             let instance_to_be = store.store_data().next_id::<InstanceData>();
 
-            let info = Arc::new(InstanceAllocationInfo {
-                image_base: compiled_module.code().as_ptr() as usize,
-                functions: compiled_module.functions().clone(),
-                shared_signatures: self.cur.module.signatures().as_module_map().into(),
-            });
-
             let mut instance_handle =
                 store
                     .engine()
                     .allocator()
                     .allocate(InstanceAllocationRequest {
                         module: compiled_module.module().clone(),
-                        info,
+                        info: self.cur.module.alloc_info().clone(),
                         #[cfg(feature = "memfd-allocator")]
                         memfds: Some(memfds),
                         imports: self.cur.build(),
