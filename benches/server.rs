@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
 use wasmtime::*;
 use wasmtime_wasi::{sync::WasiCtxBuilder, WasiCtx};
 
@@ -22,19 +22,19 @@ impl Server {
         let wasi = WasiCtxBuilder::new().build();
         let mut store = Store::new(&self.engine, wasi);
         let instance = ipre.instantiate_async(&mut store).await.unwrap();
-        let start_func = instance.get_func(&mut store, "_start").unwrap();
-        start_func
-            .call_async(&mut store, &[], &mut [])
-            .await
-            .unwrap();
+        //        let start_func = instance.get_func(&mut store, "_start").unwrap();
+        //        start_func
+        //            .call_async(&mut store, &[], &mut [])
+        //            .await
+        //            .unwrap();
     }
 }
 
 fn run_server(
+    c: &mut Criterion,
     strategy: &InstanceAllocationStrategy,
     filenames: &[&str],
     occupancy: usize,
-    instantiations: usize,
 ) {
     let engine = common::make_engine(strategy, /* async = */ true).unwrap();
     let mut instance_pres = vec![];
@@ -53,45 +53,40 @@ fn run_server(
         instance_pres,
     });
 
-    // Spawn an initial batch of jobs up to the
-    let server_clone = server.clone();
-
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(async move {
-        for i in 0..instantiations {
-            let server = server_clone.clone();
-            tokio::spawn(server.job(i));
-        }
-    });
+    c.bench_function(
+        &format!(
+            "strategy {}, occupancy {}, benches {:?}",
+            common::benchmark_name(strategy),
+            occupancy,
+            filenames
+        ),
+        move |b| {
+            let server_clone = server.clone();
+            b.iter_custom(move |instantiations| {
+                let server_clone = server_clone.clone();
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                let now = std::time::Instant::now();
+                rt.block_on(async move {
+                    for i in 0..instantiations {
+                        let server = server_clone.clone();
+                        tokio::spawn(server.job(i as usize));
+                    }
+                });
+                now.elapsed()
+            });
+        },
+    );
 }
 
 fn bench_server(c: &mut Criterion) {
     common::build_wasi_example();
 
-    let modules = vec!["wasi.wasm"];
+    //    let modules = vec!["wasi.wasm"];
+    let modules = vec!["spidermonkey.wasm"];
     let occupancy = 1000;
 
     for strategy in common::strategies() {
-        c.bench_function(
-            &format!(
-                "strategy {}, occupancy {}, benches {:?}",
-                common::benchmark_name(&strategy),
-                occupancy,
-                modules,
-            ),
-            |b| {
-                b.iter_custom(|iters| {
-                    let start = Instant::now();
-                    run_server(
-                        &strategy,
-                        &modules,
-                        occupancy,
-                        /* instantiations = */ iters as usize,
-                    );
-                    start.elapsed()
-                });
-            },
-        );
+        run_server(c, &strategy, &modules[..], occupancy);
     }
 }
 

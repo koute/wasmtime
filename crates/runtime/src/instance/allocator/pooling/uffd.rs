@@ -435,7 +435,7 @@ impl Drop for PageFaultHandler {
 mod test {
     use super::*;
     use crate::{
-        Imports, InstanceAllocationRequest, InstanceLimits, ModuleLimits,
+        Imports, InstanceAllocationInfo, InstanceAllocationRequest, InstanceLimits, ModuleLimits,
         PoolingAllocationStrategy, Store, StorePtr, VMSharedSignatureIndex,
     };
     use std::sync::atomic::AtomicU64;
@@ -567,7 +567,7 @@ mod test {
 
             let mut handles = Vec::new();
             let module = Arc::new(module);
-            let functions = &PrimaryMap::new();
+            let functions = Arc::new(PrimaryMap::new());
 
             // Allocate the maximum number of instances with the maximum number of memories
             for _ in 0..instances.max_instances {
@@ -577,15 +577,17 @@ mod test {
                             PoolingAllocationStrategy::Random,
                             InstanceAllocationRequest {
                                 module: module.clone(),
-                                image_base: 0,
-                                functions,
+                                info: Arc::new(InstanceAllocationInfo {
+                                    image_base: 0,
+                                    functions: functions.clone(),
+                                    shared_signatures: VMSharedSignatureIndex::default().into(),
+                                }),
                                 imports: Imports {
                                     functions: &[],
                                     tables: &[],
                                     memories: &[],
                                     globals: &[],
                                 },
-                                shared_signatures: VMSharedSignatureIndex::default().into(),
                                 host_state: Box::new(()),
                                 store: StorePtr::new(&mut mock_store),
                                 wasm_data: &[],

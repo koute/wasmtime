@@ -37,11 +37,22 @@ pub fn build_wasi_example() {
 }
 
 pub fn strategies() -> Vec<InstanceAllocationStrategy> {
+    let mut module_limits = ModuleLimits::default();
+    module_limits.functions = 50000;
+    module_limits.globals = 10000;
+    module_limits.types = 50000;
+    module_limits.memory_pages = 2048;
+
+    let pooling = InstanceAllocationStrategy::Pooling {
+        strategy: PoolingAllocationStrategy::Random,
+        module_limits,
+        instance_limits: InstanceLimits::default(),
+    };
     vec![
         // Skip the on-demand allocator when uffd is enabled
-        #[cfg(any(not(feature = "uffd"), not(target_os = "linux")))]
-        InstanceAllocationStrategy::OnDemand,
-        InstanceAllocationStrategy::pooling(),
+        //        #[cfg(any(not(feature = "uffd"), not(target_os = "linux")))]
+        //        InstanceAllocationStrategy::OnDemand,
+        pooling,
     ]
 }
 
@@ -67,8 +78,7 @@ pub fn load_module(engine: &Engine, module_name: &str) -> Result<(Module, Linker
     path.push("instantiation");
     path.push(module_name);
 
-    let module = Module::from_file(&engine, &path)
-        .unwrap_or_else(|_| panic!("failed to load benchmark `{}`", path.display()));
+    let module = Module::from_file(&engine, &path).unwrap();
     let mut linker = Linker::new(&engine);
     wasmtime_wasi::add_to_linker(&mut linker, |cx| cx).unwrap();
 
