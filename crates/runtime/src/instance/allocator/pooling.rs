@@ -1726,7 +1726,7 @@ mod test {
 
         let mut handles = Vec::new();
         let module = Arc::new(Module::default());
-        let functions = &PrimaryMap::new();
+        let functions = Arc::new(PrimaryMap::new());
 
         for _ in (0..3).rev() {
             handles.push(
@@ -1735,15 +1735,17 @@ mod test {
                         PoolingAllocationStrategy::NextAvailable,
                         InstanceAllocationRequest {
                             module: module.clone(),
-                            image_base: 0,
-                            functions,
+                            info: Arc::new(InstanceAllocationInfo {
+                                image_base: 0,
+                                functions: functions.clone(),
+                                shared_signatures: VMSharedSignatureIndex::default().into(),
+                            }),
                             imports: Imports {
                                 functions: &[],
                                 tables: &[],
                                 memories: &[],
                                 globals: &[],
                             },
-                            shared_signatures: VMSharedSignatureIndex::default().into(),
                             host_state: Box::new(()),
                             store: StorePtr::empty(),
                             wasm_data: &[],
@@ -1759,15 +1761,17 @@ mod test {
             PoolingAllocationStrategy::NextAvailable,
             InstanceAllocationRequest {
                 module: module.clone(),
-                functions,
-                image_base: 0,
+                info: Arc::new(InstanceAllocationInfo {
+                    functions,
+                    image_base: 0,
+                    shared_signatures: VMSharedSignatureIndex::default().into(),
+                }),
                 imports: Imports {
                     functions: &[],
                     tables: &[],
                     memories: &[],
                     globals: &[],
                 },
-                shared_signatures: VMSharedSignatureIndex::default().into(),
                 host_state: Box::new(()),
                 store: StorePtr::empty(),
                 wasm_data: &[],
