@@ -133,7 +133,6 @@ fn memory_init() -> Result<()> {
 }
 
 #[test]
-#[cfg_attr(feature = "memfd-allocator", ignore)]
 fn memory_guard_page_trap() -> Result<()> {
     let mut config = Config::new();
     config.allocation_strategy(InstanceAllocationStrategy::Pooling {

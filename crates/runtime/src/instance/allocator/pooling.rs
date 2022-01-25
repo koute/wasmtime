@@ -16,6 +16,7 @@ use crate::memfd::{MemoryMemFd, ModuleMemFds};
 use crate::InstanceAllocationInfo;
 use crate::{instance::Instance, Memory, Mmap, Table, VMContext};
 use anyhow::{anyhow, bail, Context, Result};
+use libc::c_void;
 use rand::Rng;
 #[cfg(feature = "memfd-allocator")]
 use rustix::fd::AsRawFd;
@@ -420,6 +421,7 @@ impl InstancePool {
                 &req.memfds,
                 &self.memories,
                 self.memories.max_wasm_pages,
+                self.memories.initial_memory_offset,
             )?;
         }
 
@@ -580,6 +582,7 @@ impl InstancePool {
         maybe_memfds: &Option<Arc<ModuleMemFds>>,
         memories: &MemoryPool,
         max_wasm_pages: u64,
+        initial_guard: usize,
     ) -> Result<(), InstantiationError> {
         let module = instance.module.as_ref();
 
@@ -598,10 +601,7 @@ impl InstancePool {
                 .and_then(|memfds| memfds.get_memory_image(defined_index));
             let initial_size = plan.memory.minimum * WASM_PAGE_SIZE as u64;
             if slot.is_none() {
-                *slot = Some(MemFDSlot::create(
-                    initial_size as usize,
-                    memories.memory_size,
-                )?);
+                *slot = Some(MemFDSlot::create(memories.memory_size, initial_guard)?);
             }
             let slot = slot.as_mut().unwrap();
             slot.instantiate(initial_size as usize, image)?;
@@ -717,58 +717,67 @@ unsafe impl Sync for PoolBacking {}
 #[cfg(feature = "memfd-allocator")]
 #[derive(Debug)]
 pub struct MemFDSlot {
+    guard_map: *mut c_void,
     static_size: usize,
+    initial_guard: usize,
     base: usize,
     pub(crate) image: Option<Arc<MemoryMemFd>>,
-    image_map: Option<Mmap>,
+    extension_offset: usize,
     extension_file: File,
-    heap_limit: usize,
-    extension_map: Option<Mmap>,
     dirty: bool,
 }
 
 #[cfg(feature = "memfd-allocator")]
 impl MemFDSlot {
-    fn create(initial_size_bytes: usize, static_size: usize) -> Result<Self, InstantiationError> {
-        // Create a MemFD for the anonymous backing first -- this
-        // covers extended heap beyond the initial image.
+    fn create(static_size: usize, initial_guard: usize) -> Result<Self, InstantiationError> {
+        // Create an anonymous mapping with no access to reserve
+        // `static_size`. This creates the guard regions on both sides
+        // of the heap. This also serves to reserve the address space
+        // that we then modify below by overwriting portions of the
+        // mapping.
+        let guard_map = unsafe {
+            rustix::io::mmap_anonymous(
+                std::ptr::null_mut(),
+                static_size,
+                rustix::io::ProtFlags::empty(),
+                rustix::io::MapFlags::PRIVATE,
+            )
+            .map_err(|e| InstantiationError::Resource(e.into()))?
+        };
+
+        // Create a MemFD for the memory growth first -- this covers
+        // extended heap beyond the initial image.
         let extension_memfd = memfd::MemfdOptions::new()
             .create("wasm-anonymous-heap")
             .map_err(|e| InstantiationError::Resource(e.into()))?;
         let extension_file = extension_memfd.into_file();
         extension_file
-            .set_len(initial_size_bytes as u64)
+            .set_len(0)
             .map_err(|e| InstantiationError::Resource(e.into()))?;
-        let extension_map = Mmap::from_open_file(
-            &extension_file,
-            /* is_writable = */ true,
-            /* is_cow = */ false,
-            /* len = */ Some(static_size),
-            /* addr = */ None,
-            /* file_offset = */ 0,
-        )
-        .map_err(|e| InstantiationError::Resource(e.into()))?;
+
+        let base = guard_map as usize + initial_guard;
+
         Ok(MemFDSlot {
-            base: extension_map.as_ptr() as usize,
+            guard_map,
             static_size,
+            initial_guard,
+            base,
             image: None,
-            image_map: None,
             extension_file,
-            heap_limit: initial_size_bytes,
-            extension_map: Some(extension_map),
+            extension_offset: 0,
             dirty: false,
         })
     }
 
     pub(crate) fn set_heap_limit(&mut self, size_bytes: usize) -> Result<()> {
-        assert!(size_bytes >= self.heap_limit);
-        self.heap_limit = size_bytes;
+        assert!(size_bytes >= self.extension_offset);
         // This is all that is needed to make the new memory
         // accessible; we don't need to mprotect anything. (The
         // mapping itself is always R+W for the max possible heap
         // size, and only the anonymous-backing file length catches
         // out-of-bounds accesses.)
-        self.extension_file.set_len(size_bytes as u64)?;
+        self.extension_file
+            .set_len((size_bytes - self.extension_offset) as u64)?;
         Ok(())
     }
 
@@ -779,72 +788,95 @@ impl MemFDSlot {
     ) -> Result<(), InstantiationError> {
         assert!(!self.dirty);
 
-        // Regardless of the code-path below, we need the backing file
-        // to be the right size.
-        self.extension_file
-            .set_len(initial_size_bytes as u64)
-            .map_err(|e| InstantiationError::Resource(e.into()))?;
-        self.heap_limit = initial_size_bytes;
-
         if let &Some(ref existing_image) = &self.image {
-            // Fast-path: previously instantiated with the same image, so
-            // the mappings are already correct; there is no need to mmap
-            // anything.
+            // Fast-path: previously instantiated with the same image,
+            // so the mappings are already correct; there is no need
+            // to mmap anything. Given that we asserted not-dirty
+            // above, any dirty pages will have already been thrown
+            // away by madvise() during the previous termination.
             if let Some(image) = maybe_image {
                 if existing_image.fd.as_file().as_raw_fd() == image.fd.as_file().as_raw_fd() {
                     self.dirty = true;
                     return Ok(());
                 }
             }
-
-            // Otherwise, if there is another existing mapping, we need to
-            // undo both it and the anon backing, and redo the anon
-            // backing mapping.
-            drop(self.image_map.take());
-            drop(self.image.take());
-            drop(self.extension_map.take());
-
-            let extension_map = Mmap::from_open_file(
-                &self.extension_file,
-                /* is_writable = */ true,
-                /* is_cow = */ false,
-                /* len = */ Some(self.static_size),
-                /* addr = */ None,
-                /* file_offset = */ 0,
-            )
-            .map_err(|e| InstantiationError::Resource(e.into()))?;
-            self.base = extension_map.as_ptr() as usize;
-            self.extension_map = Some(extension_map);
         }
 
-        // Now, we have just the anon backing; we can map the new
-        // image on top of it.
+        // Otherwise, we need to redo (i) the anonymous-mmap backing
+        // for the initial heap size, (ii) the extension-file backing,
+        // and (iii) the initial-heap-image mapping if present.
+
+        // Security/audit note: we map all of these MAP_PRIVATE, so
+        // all instance data is local to the mapping, not propagated
+        // to the backing fd. We throw away this CoW overlay with
+        // madvise() below, from base up to extension_offset (which is
+        // at least initial_size_bytes, and extended when the
+        // extension file is, so it covers all three mappings) when
+        // terminating the instance.
+
+        // Anonymous mapping behind the initial heap size: this gives
+        // zeroes for any "holes" in the initial heap image. Anonymous
+        // mmap memory is faster to fault in than a CoW of a file,
+        // even a file with zero holes, because the kernel's CoW path
+        // unconditionally copies *something* (even if just a page of
+        // zeroes). Anonymous zero pages are fast: the kernel
+        // pre-zeroes them, and even if it runs out of those, a memset
+        // is half as expensive as a memcpy (only writes, no reads).
+        if initial_size_bytes > 0 {
+            unsafe {
+                let ptr = rustix::io::mmap_anonymous(
+                    self.base as *mut c_void,
+                    initial_size_bytes,
+                    rustix::io::ProtFlags::READ | rustix::io::ProtFlags::WRITE,
+                    rustix::io::MapFlags::PRIVATE | rustix::io::MapFlags::FIXED,
+                )
+                .map_err(|e| InstantiationError::Resource(e.into()))?;
+                assert_eq!(ptr as usize, self.base);
+            }
+        }
+
+        // An "extension file": this allows us to grow the heap by
+        // doing just an ftruncate(), without changing any
+        // mappings. This is important to avoid the process-wide mmap
+        // lock on Linux.
+        self.extension_offset = initial_size_bytes;
+        let extension_map_len = self.static_size - (self.initial_guard + initial_size_bytes);
+        if extension_map_len > 0 {
+            unsafe {
+                let fd = rustix::fd::BorrowedFd::borrow_raw_fd(self.extension_file.as_raw_fd());
+                let ptr = rustix::io::mmap(
+                    (self.base + initial_size_bytes) as *mut c_void,
+                    extension_map_len,
+                    rustix::io::ProtFlags::READ | rustix::io::ProtFlags::WRITE,
+                    rustix::io::MapFlags::PRIVATE | rustix::io::MapFlags::FIXED,
+                    &fd,
+                    0,
+                )
+                .map_err(|e| InstantiationError::Resource(e.into()))?;
+                assert_eq!(ptr as usize, self.base + initial_size_bytes);
+            }
+        }
+
+        // Finally, the initial memory image.
         if let Some(image) = maybe_image {
             if image.len > 0 {
                 let image = image.clone();
-                let image_map = Mmap::from_open_file(
-                    &image.fd.as_file(),
-                    /* is_writable = */ true,
-                    /* is_cow = */ true,
-                    /* len = */ Some(image.len),
-                    /* addr = */ Some(self.base + image.offset),
-                    /* file_offset = */ image.offset,
-                )
-                .map_err(|e| InstantiationError::Resource(e.into()))?;
-                assert_eq!(
-                    image_map.as_ptr() as usize,
-                    self.extension_map.as_ref().unwrap().as_ptr() as usize + image.offset
-                );
 
-                // Alter the extension_map mapping so that it doesn't
-                // double-munmap the space covered both the original
-                // backing and this image mmap.
                 unsafe {
-                    self.extension_map.as_mut().unwrap().alter_base(image.len);
+                    let fd = rustix::fd::BorrowedFd::borrow_raw_fd(image.fd.as_file().as_raw_fd());
+                    let ptr = rustix::io::mmap(
+                        (self.base + image.offset) as *mut c_void,
+                        image.len,
+                        rustix::io::ProtFlags::READ | rustix::io::ProtFlags::WRITE,
+                        rustix::io::MapFlags::PRIVATE | rustix::io::MapFlags::FIXED,
+                        &fd,
+                        image.offset as u64,
+                    )
+                    .map_err(|e| InstantiationError::Resource(e.into()))?;
+                    assert_eq!(ptr as usize, self.base + image.offset);
                 }
 
                 self.image = Some(image);
-                self.image_map = Some(image_map);
             }
         }
 
@@ -854,49 +886,32 @@ impl MemFDSlot {
 
     fn clear_and_remain_ready(&mut self) -> Result<()> {
         assert!(self.dirty);
-        // madvise the whole range; that's it! This will throw away
-        // dirty pages: CoW-private pages on top of the initial heap
-        // image, and on top of the initially-zero extension anonymous
-        // memfd.
+        // madvise the image range; that's it! This will throw away
+        // dirty pages, which are CoW-private pages on top of the
+        // initial heap image memfd.
         unsafe {
             rustix::io::madvise(
-                self.base as _,
-                self.static_size,
+                self.base as *mut c_void,
+                self.extension_offset,
                 rustix::io::Advice::LinuxDontNeed,
             )?;
         }
-        // truncate the extension file down to zero bytes to throw away all data.
+
+        // truncate the extension file down to zero bytes to reset heap length.
         self.extension_file
             .set_len(0)
             .map_err(|e| InstantiationError::Resource(e.into()))?;
-        self.heap_limit = 0;
         self.dirty = false;
         Ok(())
     }
+}
 
-    // TODO: use this to allow an image to be unloaded
-    #[allow(dead_code)]
-    fn clear_image(&mut self) -> Result<()> {
-        // First do the madvise to drop all dirty pages.
-        self.clear_and_remain_ready()?;
-        // Now drop the image mapping and Arc reference to the image.
-        let _ = self.image_map.take();
-        let _ = self.image.take();
-        // Now remap the extension_map to return to the initial state
-        // and prepare for a new image mapping.
-        let _ = self.extension_map.take();
-        let extension_map = Mmap::from_open_file(
-            &self.extension_file,
-            /* is_writable = */ true,
-            /* is_cow = */ false,
-            /* len = */ Some(self.static_size),
-            /* addr = */ None,
-            /* file_offset = */ 0,
-        )
-        .map_err(|e| InstantiationError::Resource(e.into()))?;
-        self.base = extension_map.as_ptr() as usize;
-        self.extension_map = Some(extension_map);
-        Ok(())
+#[cfg(feature = "memfd-allocator")]
+impl Drop for MemFDSlot {
+    fn drop(&mut self) {
+        unsafe {
+            rustix::io::munmap(self.guard_map, self.static_size).unwrap();
+        }
     }
 }
 

@@ -187,18 +187,6 @@ impl Mmap {
         }
     }
 
-    /// Chop `offset` bytes off the front of this mapping, dropping
-    /// responsibility for munmap'ing this memory on Drop. This should
-    /// be used when layering another mmap on top of the first;
-    /// otherwise, one might double-munmap, which could lead to race
-    /// conditions where another mmap grabs the space between one and
-    /// another munmap.
-    #[cfg(unix)]
-    pub unsafe fn alter_base(&mut self, offset: usize) {
-        self.ptr += offset;
-        self.len -= offset;
-    }
-
     /// Create a new `Mmap` pointing to `accessible_size` bytes of page-aligned accessible memory,
     /// within a reserved mapping of `mapping_size` bytes. `accessible_size` and `mapping_size`
     /// must be native page-size multiples.
