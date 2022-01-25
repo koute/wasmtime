@@ -739,7 +739,7 @@ impl MemFDSlot {
         let guard_map = unsafe {
             rustix::io::mmap_anonymous(
                 std::ptr::null_mut(),
-                static_size,
+                static_size + initial_guard,
                 rustix::io::ProtFlags::empty(),
                 rustix::io::MapFlags::PRIVATE,
             )
@@ -911,7 +911,7 @@ impl MemFDSlot {
 impl Drop for MemFDSlot {
     fn drop(&mut self) {
         unsafe {
-            rustix::io::munmap(self.guard_map, self.static_size).unwrap();
+            rustix::io::munmap(self.guard_map, self.static_size + self.initial_guard).unwrap();
         }
     }
 }
