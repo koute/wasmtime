@@ -21,7 +21,7 @@ use std::convert::TryFrom;
 use std::hash::Hash;
 use std::ops::Range;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::{mem, ptr, slice};
 use wasmtime_environ::{
@@ -462,15 +462,16 @@ impl Instance {
         }
     }
 
-    /// Get a word of the bitmap of anyfunc-initialized bits, and the bitmask for the particular bit.
-    pub(crate) fn get_anyfunc_bitmap_word(&self, index: FuncIndex) -> (&AtomicU64, u64) {
+    /// Get a word of the bitmap of anyfunc-initialized bits, and the
+    /// bitmask for the particular bit.
+    pub(crate) fn get_anyfunc_bitmap_word(&self, index: FuncIndex) -> (&mut u64, u64) {
         let word_index = index.as_u32() / 64;
         let bit_index = index.as_u32() % 64;
         let word = unsafe {
-            self.vmctx_plus_offset::<AtomicU64>(
+            self.vmctx_plus_offset::<u64>(
                 self.offsets.vmctx_anyfuncs_init_begin() + (word_index * 8),
             )
-            .as_ref()
+            .as_mut()
             .unwrap()
         };
         let mask = 1u64 << (bit_index as u64);
@@ -493,14 +494,21 @@ impl Instance {
 
         unsafe {
             let (bitmap_word, bitmask) = self.get_anyfunc_bitmap_word(index);
+            if *bitmap_word & bitmask == 0 {
+                let anyfunc = self
+                    .vmctx_plus_offset::<VMCallerCheckedAnyfunc>(self.offsets.vmctx_anyfunc(index))
+                    .as_ref()
+                    .unwrap();
+                anyfunc.initialize(self.construct_anyfunc(index));
+                let (bitmap_word, bitmask) = self.get_anyfunc_bitmap_word(index);
+                *bitmap_word |= bitmask;
+            }
+
             let anyfunc = self
                 .vmctx_plus_offset::<VMCallerCheckedAnyfunc>(self.offsets.vmctx_anyfunc(index))
                 .as_ref()
                 .unwrap();
-            if (bitmap_word.load(Ordering::Acquire) & bitmask) == 0 {
-                anyfunc.initialize(self.construct_anyfunc(index));
-                bitmap_word.fetch_or(bitmask, Ordering::Release);
-            }
+
             Some(anyfunc)
         }
     }
