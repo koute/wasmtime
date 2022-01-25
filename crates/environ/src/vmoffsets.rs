@@ -85,6 +85,8 @@ pub struct VMOffsets<P> {
     defined_memories: u32,
     defined_globals: u32,
     defined_anyfuncs: u32,
+    anyfuncs_init: u32,
+    anyfuncs_init_u64_words: u32,
     builtin_functions: u32,
     size: u32,
 }
@@ -187,6 +189,8 @@ impl<P: PtrSize> From<VMOffsetsFields<P>> for VMOffsets<P> {
             defined_memories: 0,
             defined_globals: 0,
             defined_anyfuncs: 0,
+            anyfuncs_init: 0,
+            anyfuncs_init_u64_words: 0,
             builtin_functions: 0,
             size: 0,
         };
@@ -275,7 +279,7 @@ impl<P: PtrSize> From<VMOffsetsFields<P>> for VMOffsets<P> {
                     .unwrap(),
             )
             .unwrap();
-        ret.builtin_functions = ret
+        ret.anyfuncs_init = ret
             .defined_anyfuncs
             .checked_add(
                 ret.num_imported_functions
@@ -284,6 +288,11 @@ impl<P: PtrSize> From<VMOffsetsFields<P>> for VMOffsets<P> {
                     .checked_mul(u32::from(ret.size_of_vmcaller_checked_anyfunc()))
                     .unwrap(),
             )
+            .unwrap();
+        ret.anyfuncs_init_u64_words = (ret.num_defined_functions + 63) / 64;
+        ret.builtin_functions = ret
+            .anyfuncs_init
+            .checked_add(ret.anyfuncs_init_u64_words.checked_mul(8).unwrap())
             .unwrap();
         ret.size = ret
             .builtin_functions
@@ -587,6 +596,18 @@ impl<P: PtrSize> VMOffsets<P> {
     #[inline]
     pub fn vmctx_globals_begin(&self) -> u32 {
         self.defined_globals
+    }
+
+    /// The offset of the `anyfuncs_init` bitset.
+    #[inline]
+    pub fn vmctx_anyfuncs_init_begin(&self) -> u32 {
+        self.anyfuncs_init
+    }
+
+    /// The length of the `anyfuncs_init` bitset in bytes.
+    #[inline]
+    pub fn vmctx_anyfuncs_init_len(&self) -> u32 {
+        self.anyfuncs_init_u64_words * 8
     }
 
     /// The offset of the `anyfuncs` array.

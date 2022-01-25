@@ -129,3 +129,9 @@ harness = false
 [[bench]]
 name = "thread_eager_init"
 harness = false
+
+[profile.bench]
+debug = true
+
+[profile.release]
+debug = true

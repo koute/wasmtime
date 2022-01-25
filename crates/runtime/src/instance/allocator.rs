@@ -561,10 +561,12 @@ unsafe fn initialize_vmcontext(instance: &mut Instance, req: InstanceAllocationR
         req.imports.globals.len(),
     );
 
-    // Zero the anyfuncs -- they will be lazily initialized as requred
-    let base = instance.anyfunc_base();
-    let anyfuncs = std::slice::from_raw_parts_mut(base, instance.module.functions.len());
-    anyfuncs.fill(VMCallerCheckedAnyfunc::zero());
+    // Zero the anyfunc-initialized bitmap -- they will be lazily initialized as requred
+    let base = instance.vmctx_plus_offset(instance.offsets.vmctx_anyfuncs_init_begin());
+    let bitmap_words = (instance.module.functions.len() + 63) / 64;
+    let len = bitmap_words * 8;
+    let slice = std::slice::from_raw_parts_mut(base as *mut u8, len);
+    slice.fill(0);
 
     // Initialize the defined tables
     let mut ptr = instance.vmctx_plus_offset(instance.offsets.vmctx_tables_begin());
